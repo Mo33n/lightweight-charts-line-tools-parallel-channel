@@ -5,8 +5,7 @@
 This package provides a specialized **Parallel Channel** drawing tool for the [Lightweight Charts v5+](https://github.com/tradingview/lightweight-charts) plugin system. It allows traders to define trend channels by drawing a base trend line and an accompanying parallel offset line. It is part of a modular, high-performance **drop-in replacement** suite for the legacy [v3.8 Line Tools Build](https://github.com/difurious/lightweight-charts-line-tools).
 
 ## 🎥 Video Demo
-
-**Coming Soon!**
+https://github.com/user-attachments/assets/900a6759-d0cd-42e5-a09c-7ed0d94bd42e
 
 
 ## ⚠️ Prerequisites
