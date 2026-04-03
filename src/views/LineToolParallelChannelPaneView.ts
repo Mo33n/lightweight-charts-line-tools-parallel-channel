@@ -92,6 +92,19 @@ export class LineToolParallelChannelPaneView<HorzScaleItem> extends LineToolPane
 			return;
 		}
 
+
+		/**
+		 * CULLING CHECK
+		 * 
+		 * We query the Model's pre-calculated state. This ensures that the 
+		 * channel fill remains visible even if the user is zoomed into 
+		 * the center of the slanted area where no borders are visible.
+		 */
+		if (this._tool.isCulled()) {
+			//console.log('parallel channel culled')
+			return;
+		}
+
 		// 2. Convert Points to Screen Coordinates
 		const hasScreenPoints = this._updatePoints();
 		if (!hasScreenPoints) {
@@ -104,62 +117,7 @@ export class LineToolParallelChannelPaneView<HorzScaleItem> extends LineToolPane
 		const compositeRenderer = (this._renderer as CompositeRenderer<HorzScaleItem>);
 		compositeRenderer.clear();
 
-		// --- 1. Culling/Prerequisite Checks ---
-        // We can only cull effectively when the shape is fully defined (3 points)
-		if (currentPoints.length >= 3) {
-            
-            // 1. Get the derived P3 (Index 3)
-            const P3 = this._tool.getPoint(3); 
-            if (!P3) {
-                // Should not happen if currentPoints.length >= 3, but is a safe exit
-                this._renderer.clear();
-                return;
-            }
-
-            // 2. Construct the input points array for the culler: [P0, P1, P2, P3]
-            // This ensures index 3 is available for lookup.
-            const cullerInputPoints: LineToolPoint[] = [
-                currentPoints[0], 
-                currentPoints[1], 
-                currentPoints[2], 
-                P3
-            ];
-            
-            // 3. Construct the Culling Info object
-            const cullingInfo: LineToolCullingInfo = {
-                subSegments: [
-                    [0, 1], // Top Line (P0 to P1)
-                    [2, 3]  // Bottom Line (P2 to P3, the derived point)
-                ]
-            };
-
-            // 4. Perform Culling Check using the enhanced function
-
-			/**
-			 * CULLING & VISIBILITY CHECK
-			 *
-			 * The Parallel Channel is defined by 3 points, but occupies the space of 4.
-			 * 1. We derive the 4th point (P3) to form the complete parallelogram.
-			 * 2. We construct a `cullingInfo` object defining the Top (P0-P1) and Bottom (P2-P3) edges.
-			 * 3. We pass this to the culler. If the shape is fully off-screen, we skip rendering.
-			 */
-            const cullingState = getToolCullingState(
-                cullerInputPoints, // Pass the 4-point array
-                this._tool as BaseLineTool<HorzScaleItem>,
-                options.extend,
-                undefined, 
-                cullingInfo 
-            );
-            
-            if (cullingState !== OffScreenState.Visible) {
-				//console.log('parallel channel culled')
-                this._renderer.clear();
-                return; // Exit if culled
-            }
-		}
-
-
-
+	
 		// --- 3. RENDERING STATE MACHINE ---
 
 		/**

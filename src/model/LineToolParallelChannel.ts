@@ -37,6 +37,8 @@ import {
 	lineThroughPoints,
 	interpolateLogicalIndexFromTime,
 	interpolateTimeFromLogicalIndex,
+	getToolCullingState,
+	OffScreenState,
 } from 'lightweight-charts-line-tools-core';
 
 import { LineToolParallelChannelPaneView } from '../views/LineToolParallelChannelPaneView';
@@ -290,6 +292,7 @@ export class LineToolParallelChannel<HorzScaleItem> extends BaseLineTool<HorzSca
 	 * @returns The calculated {@link LineToolPoint}, or `null` if points are missing.
 	 * @override
 	 */
+	/*
 	public override getPoint(index: number): LineToolPoint | null {
 		// Use the full set of points (permanent + last/ghost point)
 		const currentPoints = this.points();
@@ -345,6 +348,100 @@ export class LineToolParallelChannel<HorzScaleItem> extends BaseLineTool<HorzSca
 			timestamp: stableTime,
 			price: stablePrice,
 		};
+	}
+	*/
+
+	/**
+	 * Calculates the logical position for any of the 6 anchors (real or virtual).
+	 *
+	 * **Tutorial Note on Virtual Anchors:**
+	 * - **0-2:** Returns the stored points P0, P1, P2.
+	 * - **3 (Derived Corner):** Calculates the 4th corner (Bottom-Right) to complete the parallelogram.
+	 *   Logic: P3.x = P1.x, P3.y = P2.y + (P1.y - P0.y).
+	 * - **4-5 (Midpoints):** Calculates the "Height" handles using pure geometric averages.
+	 *   - Index 4: Bottom Edge Midpoint (Center of P2-P3).
+	 *   - Index 5: Top Edge Midpoint (Center of P0-P1).
+	 *
+	 * By using arithmetic averages for both Time and Price, we ensure the anchors stay
+	 * perfectly centered on sloped lines. This avoids the "jumping" effect caused by 
+	 * trying to force handles onto discrete bars, matching the smooth behavior 
+	 * of the Rectangle tool.
+	 *
+	 * @param index - The anchor index (0-5).
+	 * @returns The calculated {@link LineToolPoint}, or `null` if points are missing.
+	 * @override
+	 */
+	public override getPoint(index: number): LineToolPoint | null {
+		const currentPoints = this.points();
+
+		// P0, P1, P2 are the primary stored/ghosted points.
+		if (index < 3) {
+			return currentPoints[index] || null;
+		}
+
+		// Cannot calculate virtual anchors (3, 4, 5) if the primary points are missing.
+		if (currentPoints.length < 3) {
+			return null;
+		}
+
+		const [p0, p1, p2] = currentPoints;
+
+		// 1. Anchor 3 (Derived 4th Corner - Bottom Right)
+		// We derive P3 so that the segment P2-P3 is mathematically parallel to P0-P1.
+		// Since the sides are rigid vertically, P3 shares P1's timestamp.
+		if (index === 3) {
+			const channelHeight = p1.price - p0.price; 
+			return {
+				timestamp: p1.timestamp,
+				price: p2.price + channelHeight,
+			};
+		}
+
+		// 2. Identify the endpoints for the requested midpoint
+		let midPointA: LineToolPoint;
+		let midPointB: LineToolPoint;
+
+		if (index === 4) { 
+			const p3 = this.getPoint(3);
+			if (!p3) return null;
+			midPointA = p2;
+			midPointB = p3;
+		} else if (index === 5) { 
+			midPointA = p0;
+			midPointB = p1;
+		} else {
+			return null;
+		}
+
+		// --- STABLE MIDPOINT CALCULATION START ---
+
+		// 1. Convert Timestamps to Logical Indices (Grid Positions)
+		// We use the core interpolation utility to find where these points sit on the chart grid.
+		const idxA = interpolateLogicalIndexFromTime(this._chart, this.getSeries(), midPointA.timestamp as any);
+		const idxB = interpolateLogicalIndexFromTime(this._chart, this.getSeries(), midPointB.timestamp as any);
+
+		if (idxA === null || idxB === null) {
+			// Fallback: If grid lookup fails, use raw time average
+			return {
+				timestamp: (midPointA.timestamp + midPointB.timestamp) / 2,
+				price: (midPointA.price + midPointB.price) / 2,
+			};
+		}
+
+		// 2. Average the Grid Positions
+		// This handles the "Odd Width" issue (e.g., (Index 5 + Index 6) / 2 = 5.5)
+		const midIndex = (idxA + idxB) / 2;
+
+		// 3. Convert the fractional Grid Position back to a "Visual" Timestamp
+		// Our core utility is designed to project time for these fractional spots.
+		const stableTime = interpolateTimeFromLogicalIndex(this._chart, this.getSeries(), midIndex);
+
+		return {
+			timestamp: stableTime !== null ? Number(stableTime) : (midPointA.timestamp + midPointB.timestamp) / 2,
+			price: (midPointA.price + midPointB.price) / 2,
+		};
+
+		// --- STABLE MIDPOINT CALCULATION END ---
 	}	
 
 	/**
@@ -771,4 +868,63 @@ export class LineToolParallelChannel<HorzScaleItem> extends BaseLineTool<HorzSca
 		// Default fallback for any unexpected case (e.g., if a multi-point tool allows more than 3)
 		super.addPoint(point);
 	}
+
+	/**
+	 * Calculates the Parallel Channel's visibility based on its 2D area.
+	 * 
+	 * ### Tutorial Note on Parallel Channel Culling
+	 * A Parallel Channel defines a slanted 2D zone. To prevent the background 
+	 * fill from "popping" out when the user zooms into the middle of the 
+	 * channel (where the borders are off-screen), we use Area-Based culling.
+	 * 
+	 * 1. We retrieve the 3 primary points and the derived 4th corner (P3).
+	 * 2. We pass all 4 vertices to the core engine.
+	 * 3. We set 'isAreaBased' to true.
+	 * 
+	 * The engine calculates the total bounding box (AABB) of the parallelogram 
+	 * and performs a solid 2D intersection test. This is mathematically 
+	 * simpler and more robust than checking individual line segments.
+	 * 
+	 * @protected
+	 * @override
+	 */
+	protected override updateCullingState(): void {
+		const points = this.points();
+		const options = this.options();
+
+		// 1. Guard: Ensure the tool is fully formed before culling.
+		if (points.length < this.pointsCount || this.isCreating() || this.isEditing()) {
+			this._setIsCulled(false);
+			return;
+		}
+
+		// --- AREA-BASED CULLING START ---
+
+		// 2. Derive the 4th corner (P3) to ensure the bounding box is complete.
+		const p3 = this.getPoint(3);
+		if (!p3) {
+			this._setIsCulled(false);
+			return;
+		}
+
+		// 3. Construct the array of all 4 geometric corners.
+		const channelCorners = [points[0], points[1], points[2], p3];
+
+		// 4. Invoke the Core Culler in Area-Based mode.
+		// This handles the overlap check and infinite extensions in one O(1) step.
+		const cullingState = getToolCullingState(
+			channelCorners, 
+			this, 
+			options.extend, 
+			undefined, 
+			undefined, 
+			true // isAreaBased: true
+		);
+
+		this._setIsCulled(cullingState !== OffScreenState.Visible);
+
+		// --- AREA-BASED CULLING END ---
+	}
+
+
 }
